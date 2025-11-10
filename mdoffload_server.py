@@ -85,7 +85,7 @@ class Attributes:
                 logging.debug(f"Deleting attribute {k}")
                 del(self.attrs[k])
             else:
-                logging.debug(f"Attribute {k} not found, cannot delete")
+                logging.warning(f"Attribute {k} not found, cannot delete")
 
     def list(self) -> Generator[tuple[str, str]]:
         return ((k, v) for k, v in self.attrs.items())
@@ -115,7 +115,11 @@ class ObjectKey:
         return self.key == other.key and self.instance_id == other.instance_id
 
     def __str__(self):
-        return f"ObjectKey[{self.key}/{self.instance_id}]"
+        if self.instance_id == "":
+            i="<NULL>"
+        else:
+            i=self.instance_id
+        return f"ObjectKey[{self.key}/{i}]"
 
 
 class Object:
@@ -125,6 +129,9 @@ class Object:
 
     def attrs(self) -> Attributes:
         return self.key.attributes
+
+    def locate(self) -> str:
+        return f"Object[Bucket='{self.bucket.name}',Key='{self.key}']"
 
 
 class Bucket:
@@ -145,13 +152,13 @@ class Bucket:
             if not create_if_missing:
                 raise KeyError(
                     f"Object key {key} not found in bucket {self.name}")
-            logging.debug(f"Creating object {key} in bucket {self.name}")
+            logging.debug(f"Bucket {self.name}: Creating object {key} in bucket {self.name}")
             self.objects[key] = Object(key, self)
         return self.objects[key]
 
     def delete_object(self, key: ObjectKey) -> None:
         if key not in self.objects:
-            raise KeyError(f"Object key {key} not found")
+            raise KeyError(f"bucket {self.name}: Object key {key} not found")
         del self.objects[key]
 
     def list(self) -> Generator[tuple[ObjectKey, Object]]:
@@ -290,6 +297,8 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
                               f"{context.code()} {context.details().decode('UTF-8')}")
                 return mdoffload_pb2.GetObjectAttributesResponse()
 
+            logging.debug(f"Fetching attributes on object: {obj.locate()}")
+
             response = mdoffload_pb2.GetObjectAttributesResponse(
                 attributes=obj.attrs().list()
             )
@@ -314,6 +323,7 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details("Object not found")
                 return mdoffload_pb2.SetObjectAttributesResponse()
+            logging.debug(f"Setting attributes on object: {obj.locate()}")
             obj.attrs().update(request.attributes_to_add, request.attributes_to_delete)
             logging.debug(
                 f"Updated object attributes: {','.join([f'{k}={v}' for k,v in obj.attrs().list()])}")
@@ -404,5 +414,10 @@ if __name__ == "__main__":
         if not args.server_key:
             logging.error("TLS requires a server key")
             sys.exit(1)
+
+    if args.create_bucket_if_missing:
+        logging.warning("Will create buckets if missing")
+    if args.create_object_if_missing:
+        logging.warning("Will create objects if missing")
 
     run(args)
