@@ -21,7 +21,7 @@ from mdoffload.v1 import mdoffload_pb2_grpc
 from mdoffload.v1 import mdoffload_pb2
 
 
-def gather_attributes(args) -> tuple[dict[str, str], list[str]]:
+def gather_attributes(args: argparse.Namespace) -> tuple[dict[str, str], list[str]]:
     attributes_to_add: dict[str, str] = {}
     attributes_to_delete: list[str] = []
     if args.add_attribute:
@@ -34,7 +34,10 @@ def gather_attributes(args) -> tuple[dict[str, str], list[str]]:
     return attributes_to_add, attributes_to_delete
 
 
-def get_bucket_attributes(stub, args):
+def get_bucket_attributes(
+    stub: mdoffload_pb2_grpc.MDOffloadServiceStub,
+    args: argparse.Namespace,
+) -> bool:
     request = mdoffload_pb2.GetBucketAttributesRequest(
         user_id=args.user_id,
         bucket_id=args.bucket_id if args.bucket_id else "",
@@ -47,7 +50,10 @@ def get_bucket_attributes(stub, args):
     return True
 
 
-def set_bucket_attributes(stub, args):
+def set_bucket_attributes(
+    stub: mdoffload_pb2_grpc.MDOffloadServiceStub,
+    args: argparse.Namespace,
+) -> bool:
     attributes_to_add, attributes_to_delete = gather_attributes(args)
 
     request = mdoffload_pb2.SetBucketAttributesRequest(
@@ -64,7 +70,10 @@ def set_bucket_attributes(stub, args):
     return True
 
 
-def get_object_attributes(stub, args):
+def get_object_attributes(
+    stub: mdoffload_pb2_grpc.MDOffloadServiceStub,
+    args: argparse.Namespace,
+) -> bool:
     request = mdoffload_pb2.GetObjectAttributesRequest(
         user_id=args.user_id,
         bucket_id=args.bucket_id if args.bucket_id else "",
@@ -79,7 +88,10 @@ def get_object_attributes(stub, args):
     return True
 
 
-def set_object_attributes(stub, args):
+def set_object_attributes(
+    stub: mdoffload_pb2_grpc.MDOffloadServiceStub,
+    args: argparse.Namespace,
+) -> bool:
     attributes_to_add, attributes_to_delete = gather_attributes(args)
 
     request = mdoffload_pb2.SetObjectAttributesRequest(
@@ -98,7 +110,7 @@ def set_object_attributes(stub, args):
     return True
 
 
-def issue(channel, args):
+def issue(channel: grpc.Channel, args: argparse.Namespace) -> bool:
     """
     Issue the RPC. Factored out so we can use different types of channel.
     """
@@ -129,14 +141,14 @@ def issue(channel, args):
         return False
 
 
-def _load_credential_from_file(filepath):
+def _load_credential_from_file(filepath: str) -> bytes:
     """https://github.com/grpc/grpc/blob/master/examples/python/auth/_credentials.py"""
     real_path = os.path.join(os.path.dirname(__file__), filepath)
     with open(real_path, "rb") as f:
         return f.read()
 
 
-def main(argv):
+def main(argv: list[str]) -> None:
     p = argparse.ArgumentParser(description="AuthService client")
     p.add_argument("command", help="command to run",
                    choices=["get-bucket-attributes", "set-bucket-attributes",

@@ -61,7 +61,7 @@ grpc_server_instrumentor.instrument()
 
 
 class Attributes:
-    def __init__(self):
+    def __init__(self) -> None:
         self.attrs: dict[str, str] = {}
 
     def set(self, key: str, value: str) -> None:
@@ -87,12 +87,12 @@ class Attributes:
             else:
                 logging.warning(f"Attribute {k} not found, cannot delete")
 
-    def list(self) -> Generator[tuple[str, str]]:
+    def list(self) -> Generator[tuple[str, str], None, None]:
         return ((k, v) for k, v in self.attrs.items())
 
 
 class ObjectKey:
-    def __init__(self, key_name: str, instance_id: str = ""):
+    def __init__(self, key_name: str, instance_id: str = "") -> None:
         if key_name == "" and instance_id == "":
             raise ValueError(
                 "Object key name and instance id cannot both be empty")
@@ -103,18 +103,18 @@ class ObjectKey:
     def attrs(self) -> Attributes:
         return self.attributes
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.key, self.instance_id))
 
     def has_instance_id(self) -> bool:
         return self.instance_id != ""
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, ObjectKey):
             return False
         return self.key == other.key and self.instance_id == other.instance_id
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.instance_id == "":
             i="<NULL>"
         else:
@@ -123,7 +123,7 @@ class ObjectKey:
 
 
 class Object:
-    def __init__(self, key: ObjectKey, bucket: 'Bucket'):
+    def __init__(self, key: ObjectKey, bucket: 'Bucket') -> None:
         self.key = key
         self.bucket = bucket
 
@@ -135,7 +135,7 @@ class Object:
 
 
 class Bucket:
-    def __init__(self, name: str):
+    def __init__(self, name: str) -> None:
         if not name:
             raise ValueError("Bucket name cannot be empty")
         if not re.match(r"^[a-z0-9.-]{3,63}$", name):
@@ -161,12 +161,12 @@ class Bucket:
             raise KeyError(f"bucket {self.name}: Object key {key} not found")
         del self.objects[key]
 
-    def list(self) -> Generator[tuple[ObjectKey, Object]]:
+    def list(self) -> Generator[tuple[ObjectKey, Object], None, None]:
         return ((k, v) for k, v in self.objects.items())
 
 
 class Store:
-    def __init__(self):
+    def __init__(self) -> None:
         self.buckets: dict[str, Bucket] = {}
         self.buckets_id_by_name: dict[str, str] = {}
 
@@ -198,7 +198,7 @@ class Store:
 class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
     """MDOffload gRPC server implementation."""
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args: argparse.Namespace) -> None:
         super().__init__()
         self.store = Store()
         self.args = args
@@ -224,7 +224,11 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         except KeyError:
             return None
 
-    def GetBucketAttributes(self, request, context):
+    def GetBucketAttributes(
+        self,
+        request: mdoffload_pb2.GetBucketAttributesRequest,
+        context: grpc.ServicerContext,
+    ) -> mdoffload_pb2.GetBucketAttributesResponse:
         with tracer.start_as_current_span("GetBucketAttributes"):
             logging.debug(f"GetBucketAttributes request: [{request}]")
 
@@ -245,7 +249,11 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
             logging.debug(f"GetBucketAttributes response: {response}")
             return response
 
-    def SetBucketAttributes(self, request, context):
+    def SetBucketAttributes(
+        self,
+        request: mdoffload_pb2.SetBucketAttributesRequest,
+        context: grpc.ServicerContext,
+    ) -> mdoffload_pb2.SetBucketAttributesResponse:
         with tracer.start_as_current_span("SetBucketAttributes"):
             logging.debug(f"SetBucketAttributes request: [{request}]")
 
@@ -268,7 +276,11 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
             logging.debug(f"SetBucketAttributes response: {response}")
             return response
 
-    def GetObjectAttributes(self, request, context):
+    def GetObjectAttributes(
+        self,
+        request: mdoffload_pb2.GetObjectAttributesRequest,
+        context: grpc.ServicerContext,
+    ) -> mdoffload_pb2.GetObjectAttributesResponse:
         with tracer.start_as_current_span("GetObjectAttributes"):
             logging.debug(f"GetObjectAttributes request: [{request}]")
 
@@ -305,7 +317,11 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
             logging.debug(f"GetObjectAttributes response: {response}")
             return response
 
-    def SetObjectAttributes(self, request, context):
+    def SetObjectAttributes(
+        self,
+        request: mdoffload_pb2.SetObjectAttributesRequest,
+        context: grpc.ServicerContext,
+    ) -> mdoffload_pb2.SetObjectAttributesResponse:
         with tracer.start_as_current_span("SetObjectAttributes"):
             logging.debug(f"SetObjectAttributes request: [{request}]")
 
@@ -334,14 +350,14 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
             return response
 
 
-def _load_credential_from_file(filepath):
+def _load_credential_from_file(filepath: str) -> bytes:
     """https://github.com/grpc/grpc/blob/master/examples/python/auth/_credentials.py"""
     real_path = os.path.join(os.path.dirname(__file__), filepath)
     with open(real_path, "rb") as f:
         return f.read()
 
 
-def run(args):
+def run(args: argparse.Namespace) -> None:
     server_address = f"127.0.0.1:{args.port}"
     logging.info("Starting gRPC service...\n")
     try:
