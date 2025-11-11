@@ -147,7 +147,7 @@ class Object:
         self.bucket = bucket
         fp = FilePath(args)
         self.dbfile = fp.objectattr_path(bucket.name)
-        self.tablename = "default"
+        self.tablename = str(self.key)
         self.attributes = Attributes(self.dbfile, self.tablename)
         self.args = args
 
@@ -485,8 +485,8 @@ if __name__ == "__main__":
         logging.warning(f"Resetting all stored data in {args.data_dir}")
         data_dir = args.data_dir
         if os.path.exists(data_dir):
-            os.removedirs(data_dir)
-        shutil.rmtree(data_dir)
+            shutil.rmtree(data_dir)
+        sys.exit(0)
 
     if args.create_bucket_if_missing:
         logging.warning("Will create buckets if missing")
