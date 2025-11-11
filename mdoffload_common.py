@@ -6,16 +6,19 @@ Common utilities for the MDOffload server.
 
 import logging
 
+from google.protobuf import message
+from google.protobuf.json_format import MessageToJson
 
-def msg_to_log(s: str) -> str:
+def msg_to_log(s: message.Message) -> str:
     '''
-    Replace protobuf's str() formatting with something more compact, suitable for
+    Format a protobuf message to a compact JSON representation suitable for
     logging.
 
-    This is going to need changes as the messages in play get more complex.
+    Complex messages will be hard to read in logs, but newlines in log messages
+    just make a mess.
     '''
-    items = s.splitlines()
-    return ', '.join([i.replace(': ', ':') for i in items])
+    j = MessageToJson(s, indent=None)
+    return j
 
 
 if __name__ == "__main__":

@@ -6,23 +6,27 @@ Usage::
     ./mdoffload_server.py [-v] [<port>]
 """
 
+
 import argparse
 import base64
-from collections.abc import Generator
 import coloredlogs
+import grpc
+import json
+import logging
+import os
+import re
+import shutil
+import sys
+
+from collections.abc import Generator
 from concurrent import futures
+
 from google.protobuf import any_pb2
 from google.protobuf.json_format import MessageToJson
 from google.rpc import code_pb2
 from google.rpc import error_details_pb2
 from google.rpc import status_pb2
-import grpc
 from grpc_status import rpc_status
-import logging
-import re
-import os
-import sys
-import json
 
 from mdoffload_common import msg_to_log
 
@@ -38,6 +42,8 @@ from opentelemetry.sdk.trace.export import (
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.instrumentation.grpc import GrpcInstrumentorServer
+
+from sqlitedict import SqliteDict
 
 resource = Resource(
     attributes={
@@ -62,9 +68,23 @@ grpc_server_instrumentor = GrpcInstrumentorServer()
 grpc_server_instrumentor.instrument()
 
 
+class FilePath:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.data_dir = args.data_dir
+        if not os.path.exists(self.data_dir):
+            os.makedirs(self.data_dir)
+
+    def objectattr_path(self, bucket_name: str) -> str:
+        return os.path.join(self.data_dir, f"{bucket_name}_objects.sqlite")
+
+    def bucketattr_path(self) -> str:
+        return os.path.join(self.data_dir, "_buckets.sqlite")
+
+
 class Attributes:
-    def __init__(self) -> None:
-        self.attrs: dict[str, str] = {}
+    def __init__(self, dbfile: str, tablename: str) -> None:
+        self.attrs: SqliteDict = SqliteDict(
+            dbfile, tablename=tablename, autocommit=True)
 
     def set(self, key: str, value: str) -> None:
         self.attrs[key] = value
@@ -101,10 +121,6 @@ class ObjectKey:
                 "Object key name and instance id cannot both be empty")
         self.key = key_name
         self.instance_id = instance_id
-        self.attributes = Attributes()
-
-    def attrs(self) -> Attributes:
-        return self.attributes
 
     def __hash__(self) -> int:
         return hash((self.key, self.instance_id))
@@ -126,26 +142,35 @@ class ObjectKey:
 
 
 class Object:
-    def __init__(self, key: ObjectKey, bucket: 'Bucket') -> None:
+    def __init__(self, key: ObjectKey, bucket: 'Bucket', args: argparse.Namespace) -> None:
         self.key = key
         self.bucket = bucket
+        fp = FilePath(args)
+        self.dbfile = fp.objectattr_path(bucket.name)
+        self.tablename = "default"
+        self.attributes = Attributes(self.dbfile, self.tablename)
+        self.args = args
 
     def attrs(self) -> Attributes:
-        return self.key.attributes
+        return self.attributes
 
     def locate(self) -> str:
         return f"Object[Bucket='{self.bucket.name}',Key='{self.key}']"
 
 
 class Bucket:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, args: argparse.Namespace) -> None:
         if not name:
             raise ValueError("Bucket name cannot be empty")
         if not re.match(r"^[a-z0-9.-]{3,63}$", name):
             raise ValueError(f"Invalid bucket name: {name}")
         self.name = name
         self.objects: dict[ObjectKey, Object] = {}
-        self.attributes = Attributes()
+        fp = FilePath(args)
+        self.dbfile = fp.bucketattr_path()
+        self.tablename = f"bucket_{name}"
+        self.attributes = Attributes(self.dbfile, self.tablename)
+        self.args = args
 
     def attrs(self) -> Attributes:
         return self.attributes
@@ -157,7 +182,7 @@ class Bucket:
                     f"Object key {key} not found in bucket {self.name}")
             logging.debug(
                 f"Bucket {self.name}: Creating object {key} in bucket {self.name}")
-            self.objects[key] = Object(key, self)
+            self.objects[key] = Object(key, self, self.args)
         return self.objects[key]
 
     def delete_object(self, key: ObjectKey) -> None:
@@ -171,8 +196,10 @@ class Bucket:
 
 class Store:
     def __init__(self, args: argparse.Namespace) -> None:
+        self.filepaths = FilePath(args)
         self.buckets: dict[str, Bucket] = {}
         self.buckets_id_by_name: dict[str, str] = {}
+        self.args = args
 
     def get_bucket_by_id(self, bucket_id: str, create_if_missing: bool = False) -> Bucket:
         if bucket_id not in self.buckets:
@@ -195,7 +222,7 @@ class Store:
             return self.buckets_id_by_name[bucket_name]
         bucket_id = f"bucket-{len(self.buckets)+1}"
         self.buckets_id_by_name[bucket_name] = bucket_id
-        self.buckets[bucket_id] = Bucket(bucket_name)
+        self.buckets[bucket_id] = Bucket(bucket_name, self.args)
         return bucket_id
 
 
@@ -234,7 +261,8 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         context: grpc.ServicerContext,
     ) -> mdoffload_pb2.GetBucketAttributesResponse:
         with tracer.start_as_current_span("GetBucketAttributes"):
-            logging.debug(f"GetBucketAttributes request: [{msg_to_log(str(request))}]")
+            logging.debug(
+                f"GetBucketAttributes request: [{msg_to_log(request)}]")
 
             bucket_id = self.get_bucket(
                 request.bucket_name, request.bucket_id, True)
@@ -250,7 +278,8 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
                 attributes=bucket_id.attrs().list()
             )
 
-            logging.debug(f"GetBucketAttributes response: {response}")
+            logging.debug(
+                f"GetBucketAttributes response: {msg_to_log(response)}")
             return response
 
     def SetBucketAttributes(
@@ -259,7 +288,8 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         context: grpc.ServicerContext,
     ) -> mdoffload_pb2.SetBucketAttributesResponse:
         with tracer.start_as_current_span("SetBucketAttributes"):
-            logging.debug(f"SetBucketAttributes request: [{msg_to_log(str(request))}]")
+            logging.debug(
+                f"SetBucketAttributes request: [{msg_to_log(request)}]")
 
             bucket_id = self.get_bucket(
                 request.bucket_name, request.bucket_id, True)
@@ -277,7 +307,8 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
                 f"Updated bucket attributes: {','.join([f'{k}={v}' for k,v in bucket_id.attrs().list()])}")
 
             response = mdoffload_pb2.SetBucketAttributesResponse()
-            logging.debug(f"SetBucketAttributes response: {response}")
+            logging.debug(
+                f"SetBucketAttributes response: {msg_to_log(response)}")
             return response
 
     def GetObjectAttributes(
@@ -286,7 +317,8 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         context: grpc.ServicerContext,
     ) -> mdoffload_pb2.GetObjectAttributesResponse:
         with tracer.start_as_current_span("GetObjectAttributes"):
-            logging.debug(f"GetObjectAttributes request: [{msg_to_log(str(request))}]")
+            logging.debug(
+                f"GetObjectAttributes request: [{msg_to_log(request)}]")
 
             bucket = self.get_bucket(
                 request.bucket_name, request.bucket_id, args.create_bucket_if_missing)
@@ -318,7 +350,8 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
             response = mdoffload_pb2.GetObjectAttributesResponse(
                 attributes=obj.attrs().list()
             )
-            logging.debug(f"GetObjectAttributes response: {response}")
+            logging.debug(
+                f"GetObjectAttributes response: {msg_to_log(response)}")
             return response
 
     def SetObjectAttributes(
@@ -327,7 +360,8 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         context: grpc.ServicerContext,
     ) -> mdoffload_pb2.SetObjectAttributesResponse:
         with tracer.start_as_current_span("SetObjectAttributes"):
-            logging.debug(f"SetObjectAttributes request: [{msg_to_log(str(request))}]")
+            logging.debug(
+                f"SetObjectAttributes request: [{msg_to_log(request)}]")
 
             bucket = self.get_bucket(
                 request.bucket_name, request.bucket_id, args.create_bucket_if_missing)
@@ -350,7 +384,8 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
 
             response = mdoffload_pb2.SetObjectAttributesResponse()
 
-            logging.debug(f"SetObjectAttributes response: {response}")
+            logging.debug(
+                f"SetObjectAttributes response: {msg_to_log(response)}")
             return response
 
 
@@ -416,6 +451,17 @@ if __name__ == "__main__":
     )
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Enable verbose output")
+
+    psav = p.add_argument_group("Persistence configuration")
+    psav.add_argument(
+        "--data-dir",
+        default="./data",
+        help="Directory to store attribute database files")
+    psav.add_argument(
+        "--reset",
+        help="Reset all stored data then exit. Doing this on a running server is a bad idea.",
+        action="store_true")
+
     ptls = p.add_argument_group("TLS arguments")
     ptls.add_argument("--ca-cert", help="CA certificate file (NOT YET USED)")
     ptls.add_argument("--server-cert", help="client certificate file")
@@ -434,6 +480,13 @@ if __name__ == "__main__":
         if not args.server_key:
             logging.error("TLS requires a server key")
             sys.exit(1)
+
+    if args.reset:
+        logging.warning(f"Resetting all stored data in {args.data_dir}")
+        data_dir = args.data_dir
+        if os.path.exists(data_dir):
+            os.removedirs(data_dir)
+        shutil.rmtree(data_dir)
 
     if args.create_bucket_if_missing:
         logging.warning("Will create buckets if missing")

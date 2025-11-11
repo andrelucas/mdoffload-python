@@ -45,9 +45,9 @@ def get_bucket_attributes(
         bucket_id=args.bucket_id if args.bucket_id else "",
         bucket_name=args.bucket_name if args.bucket_name else "",
     )
-    logging.debug(f"get_bucket_attributes request: [{msg_to_log(str(request))}]")
+    logging.debug(f"get_bucket_attributes request: [{msg_to_log(request)}]")
     response = stub.GetBucketAttributes(request)
-    logging.debug(f"get_bucket_attributes response: [{msg_to_log(str(response))}]")
+    logging.debug(f"get_bucket_attributes response: [{msg_to_log(response)}]")
     print(MessageToJson(response))
     return True
 
@@ -65,9 +65,9 @@ def set_bucket_attributes(
         attributes_to_add=attributes_to_add,
         attributes_to_delete=attributes_to_delete
     )
-    logging.debug(f"set_bucket_attributes request: [{msg_to_log(str(request))}]")
+    logging.debug(f"set_bucket_attributes request: [{msg_to_log(request)}]")
     response = stub.SetBucketAttributes(request)
-    logging.debug(f"set_bucket_attributes response: [{msg_to_log(str(response))}]")
+    logging.debug(f"set_bucket_attributes response: [{msg_to_log(response)}]")
     print(MessageToJson(response))
     return True
 
@@ -83,9 +83,9 @@ def get_object_attributes(
         object_key=args.object_key if args.object_key else "",
         object_instance_id=args.instance_id if args.instance_id else "",
     )
-    logging.debug(f"get_object_attributes request: [{msg_to_log(str(request))}]")
+    logging.debug(f"get_object_attributes request: [{msg_to_log(request)}]")
     response = stub.GetObjectAttributes(request)
-    logging.debug(f"get_object_attributes response: [{msg_to_log(str(response))}]")
+    logging.debug(f"get_object_attributes response: [{msg_to_log(response)}]")
     print(MessageToJson(response))
     return True
 
@@ -105,9 +105,9 @@ def set_object_attributes(
         attributes_to_add=attributes_to_add,
         attributes_to_delete=attributes_to_delete,
     )
-    logging.debug(f"set_object_attributes request: [{msg_to_log(str(request))}]")
+    logging.debug(f"set_object_attributes request: [{msg_to_log(request)}]")
     response = stub.SetObjectAttributes(request)
-    logging.debug(f"set_object_attributes response: [{msg_to_log(str(response))}]")
+    logging.debug(f"set_object_attributes response: [{msg_to_log(response)}]")
     print(MessageToJson(response))
     return True
 
