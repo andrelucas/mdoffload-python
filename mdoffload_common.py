@@ -32,4 +32,4 @@ if __name__ == "__main__":
     )
     logging.basicConfig(level=logging.DEBUG)
     logging.debug(f"Original message:\n{test_msg}")
-    logging.debug(f"Compact log message: {msg_to_log(test_msg.__str__())}")
+    logging.debug(f"Compact log message: {msg_to_log(test_msg)}")
