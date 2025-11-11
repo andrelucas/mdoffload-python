@@ -24,6 +24,8 @@ import os
 import sys
 import json
 
+from mdoffload_common import msg_to_log
+
 from mdoffload.v1 import mdoffload_pb2_grpc
 from mdoffload.v1 import mdoffload_pb2
 
@@ -80,10 +82,11 @@ class Attributes:
             self.attrs[k] = v
         for k in attributes_to_delete:
             if '=' in k:
-                logging.warning(f"Attribute delete key '{k}' contains '=', may be in error")
+                logging.warning(
+                    f"Attribute delete key '{k}' contains '=', may be in error")
             if k in self.attrs:
                 logging.debug(f"Deleting attribute {k}")
-                del(self.attrs[k])
+                del (self.attrs[k])
             else:
                 logging.warning(f"Attribute {k} not found, cannot delete")
 
@@ -116,9 +119,9 @@ class ObjectKey:
 
     def __str__(self) -> str:
         if self.instance_id == "":
-            i="<NULL>"
+            i = "<NULL>"
         else:
-            i=self.instance_id
+            i = self.instance_id
         return f"ObjectKey[{self.key}/{i}]"
 
 
@@ -152,7 +155,8 @@ class Bucket:
             if not create_if_missing:
                 raise KeyError(
                     f"Object key {key} not found in bucket {self.name}")
-            logging.debug(f"Bucket {self.name}: Creating object {key} in bucket {self.name}")
+            logging.debug(
+                f"Bucket {self.name}: Creating object {key} in bucket {self.name}")
             self.objects[key] = Object(key, self)
         return self.objects[key]
 
@@ -166,7 +170,7 @@ class Bucket:
 
 
 class Store:
-    def __init__(self) -> None:
+    def __init__(self, args: argparse.Namespace) -> None:
         self.buckets: dict[str, Bucket] = {}
         self.buckets_id_by_name: dict[str, str] = {}
 
@@ -200,7 +204,7 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
 
     def __init__(self, args: argparse.Namespace) -> None:
         super().__init__()
-        self.store = Store()
+        self.store = Store(args)
         self.args = args
 
     def get_bucket(self, bucket_name: str, bucket_id: str, create_if_missing: bool) -> Bucket | None:
@@ -230,7 +234,7 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         context: grpc.ServicerContext,
     ) -> mdoffload_pb2.GetBucketAttributesResponse:
         with tracer.start_as_current_span("GetBucketAttributes"):
-            logging.debug(f"GetBucketAttributes request: [{request}]")
+            logging.debug(f"GetBucketAttributes request: [{msg_to_log(str(request))}]")
 
             bucket_id = self.get_bucket(
                 request.bucket_name, request.bucket_id, True)
@@ -255,7 +259,7 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         context: grpc.ServicerContext,
     ) -> mdoffload_pb2.SetBucketAttributesResponse:
         with tracer.start_as_current_span("SetBucketAttributes"):
-            logging.debug(f"SetBucketAttributes request: [{request}]")
+            logging.debug(f"SetBucketAttributes request: [{msg_to_log(str(request))}]")
 
             bucket_id = self.get_bucket(
                 request.bucket_name, request.bucket_id, True)
@@ -282,7 +286,7 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         context: grpc.ServicerContext,
     ) -> mdoffload_pb2.GetObjectAttributesResponse:
         with tracer.start_as_current_span("GetObjectAttributes"):
-            logging.debug(f"GetObjectAttributes request: [{request}]")
+            logging.debug(f"GetObjectAttributes request: [{msg_to_log(str(request))}]")
 
             bucket = self.get_bucket(
                 request.bucket_name, request.bucket_id, args.create_bucket_if_missing)
@@ -323,7 +327,7 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         context: grpc.ServicerContext,
     ) -> mdoffload_pb2.SetObjectAttributesResponse:
         with tracer.start_as_current_span("SetObjectAttributes"):
-            logging.debug(f"SetObjectAttributes request: [{request}]")
+            logging.debug(f"SetObjectAttributes request: [{msg_to_log(str(request))}]")
 
             bucket = self.get_bucket(
                 request.bucket_name, request.bucket_id, args.create_bucket_if_missing)

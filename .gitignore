@@ -1,1 +1,8 @@
+# Generated buf output.
 /mdoffload/
+
+/.venv
+*.sqlite
+
+*.pyc
+__pycache__/

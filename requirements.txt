@@ -1,0 +1,10 @@
+coloredlogs
+grpcio
+grpcio-status
+grpcio-tools
+opentelemetry-api
+opentelemetry-exporter-otlp
+opentelemetry-instrumentation-grpc
+opentelemetry-sdk
+reload
+sqlitedict
