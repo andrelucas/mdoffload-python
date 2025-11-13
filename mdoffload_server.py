@@ -140,6 +140,19 @@ class ObjectKey:
             i = self.instance_id
         return f"ObjectKey[{self.key}/{i}]"
 
+    def tablename(self) -> str:
+
+        def escape(s: str) -> str:
+            return s.replace(r"_", "__")
+
+        k = base64.b64encode(escape(self.key).encode()).decode()
+        if self.instance_id == "":
+            i = "NULL"
+        else:
+            i = base64.b64encode(self.instance_id.encode()).decode()
+
+        return f"object_{k}_{i}"
+
 
 class Object:
     def __init__(self, key: ObjectKey, bucket: 'Bucket', args: argparse.Namespace) -> None:
@@ -147,7 +160,7 @@ class Object:
         self.bucket = bucket
         fp = FilePath(args)
         self.dbfile = fp.objectattr_path(bucket.name)
-        self.tablename = str(self.key)
+        self.tablename = self.key.tablename()
         self.attributes = Attributes(self.dbfile, self.tablename)
         self.args = args
 
