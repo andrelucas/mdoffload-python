@@ -36,6 +36,12 @@ def gather_attributes(args: argparse.Namespace) -> tuple[dict[str, str], list[st
     return attributes_to_add, attributes_to_delete
 
 
+def safe_print_attr(k: str, v: bytes) -> None:
+    try:
+        print(f"  {k} = {v.decode()}")
+    except UnicodeDecodeError:
+        print(f"  {k} = <binary data {base64.b64encode(v).decode()}>")
+
 def get_bucket_attributes(
     stub: mdoffload_pb2_grpc.MDOffloadServiceStub,
     args: argparse.Namespace,
@@ -51,7 +57,7 @@ def get_bucket_attributes(
     # print(MessageToJson(response, preserving_proto_field_name=True))
     print("Attributes:")
     for k, v in response.attributes.items():
-        print(f"  {k} = {v.decode()}")
+        safe_print_attr(k, v)
     return True
 
 
@@ -92,7 +98,7 @@ def get_object_attributes(
     # print(MessageToJson(response))
     print("Attributes:")
     for k, v in response.attributes.items():
-        print(f"  {k} = {v.decode()}")
+        safe_print_attr(k, v)
     return True
 
 
