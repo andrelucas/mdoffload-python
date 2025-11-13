@@ -19,14 +19,14 @@ message GetBucketAttributesRequest {
 }
 
 message GetBucketAttributesResponse {
-  map<string, string> attributes = 1;
+  map<string, bytes> attributes = 1;
 }
 
 message SetBucketAttributesRequest {
   string user_id = 5;
   string bucket_id = 1;
   string bucket_name = 2;
-  map<string, string> attributes_to_add = 3;
+  map<string, bytes> attributes_to_add = 3;
   repeated string attributes_to_delete = 4;
 }
 
@@ -41,7 +41,7 @@ message GetObjectAttributesRequest {
 }
 
 message GetObjectAttributesResponse {
-  map<string, string> attributes = 1;
+  map<string, bytes> attributes = 1;
 }
 
 message SetObjectAttributesRequest {
@@ -50,7 +50,7 @@ message SetObjectAttributesRequest {
   string bucket_name = 2;
   string object_key = 3;
   string object_instance_id = 4;
-  map<string, string> attributes_to_add = 5;
+  map<string, bytes> attributes_to_add = 5;
   repeated string attributes_to_delete = 6;
 }
 
