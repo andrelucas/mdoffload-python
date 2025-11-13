@@ -74,10 +74,20 @@ class FilePath:
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
 
-    def objectattr_path(self, bucket_name: str) -> str:
-        return os.path.join(self.data_dir, f"{bucket_name}_objects.sqlite")
+    def objectattr_path(self, bucket: 'Bucket') -> str:
+        '''
+        Object attributes are stored in a per-bucket database file. This is
+        named for the bucket ID with '-' replaced by '_', with '_objects_' as a
+        prefix.
+        '''
+        safe_id = bucket.id.replace('-', '_')
+        return os.path.join(self.data_dir, f"_objects_{safe_id}.sqlite")
 
     def bucketattr_path(self) -> str:
+        '''
+        Fixed path for the bucket attributes database. Each bucket gets its own
+        table containing its attributes.
+        '''
         return os.path.join(self.data_dir, "_buckets.sqlite")
 
 
@@ -138,10 +148,13 @@ class ObjectKey:
             i = "<NULL>"
         else:
             i = self.instance_id
-        return f"ObjectKey[{self.key}/{i}]"
+        return f"{self.key}/{i}"
 
     def tablename(self) -> str:
-
+        '''
+        Return a safe table name for this object key. Abandon all pretence of
+        speed and use base64 encoding to ensure safety.
+        '''
         def escape(s: str) -> str:
             return s.replace(r"_", "__")
 
@@ -159,7 +172,7 @@ class Object:
         self.key = key
         self.bucket = bucket
         fp = FilePath(args)
-        self.dbfile = fp.objectattr_path(bucket.name)
+        self.dbfile = fp.objectattr_path(bucket)
         self.tablename = self.key.tablename()
         self.attributes = Attributes(self.dbfile, self.tablename)
         self.args = args
@@ -168,20 +181,23 @@ class Object:
         return self.attributes
 
     def locate(self) -> str:
-        return f"Object[Bucket='{self.bucket.name}',Key='{self.key}']"
+        return f"Bucket['{self.bucket.name}'/'{self.bucket.id}'] Key['{self.key}']"
 
 
 class Bucket:
-    def __init__(self, name: str, args: argparse.Namespace) -> None:
+    def __init__(self, name: str, id: str, args: argparse.Namespace) -> None:
+        if not id:
+            raise ValueError("Bucket ID cannot be empty")
         if not name:
             raise ValueError("Bucket name cannot be empty")
         if not re.match(r"^[a-z0-9.-]{3,63}$", name):
             raise ValueError(f"Invalid bucket name: {name}")
+        self.id = id
         self.name = name
         self.objects: dict[ObjectKey, Object] = {}
         fp = FilePath(args)
         self.dbfile = fp.bucketattr_path()
-        self.tablename = f"bucket_{name}"
+        self.tablename = f"bucket_{id.replace('-', '_')}"
         self.attributes = Attributes(self.dbfile, self.tablename)
         self.args = args
 
@@ -211,32 +227,14 @@ class Store:
     def __init__(self, args: argparse.Namespace) -> None:
         self.filepaths = FilePath(args)
         self.buckets: dict[str, Bucket] = {}
-        self.buckets_id_by_name: dict[str, str] = {}
         self.args = args
 
-    def get_bucket_by_id(self, bucket_id: str, create_if_missing: bool = False) -> Bucket:
+    def get_bucket_by_id(self, bucket_name: str, bucket_id: str) -> Bucket:
         if bucket_id not in self.buckets:
-            if not create_if_missing:
+            if not self.args.create_bucket_if_missing:
                 raise KeyError(f"Bucket ID {bucket_id} not found")
-            self.buckets[bucket_id] = Bucket()
+            self.buckets[bucket_id] = Bucket(bucket_name, bucket_id, self.args)
         return self.buckets[bucket_id]
-
-    def get_bucket_by_name(self, bucket_name: str, create_if_missing: bool = False) -> Bucket:
-        if bucket_name not in self.buckets_id_by_name:
-            if not create_if_missing:
-                raise KeyError(f"Bucket name {bucket_name} not found")
-            bucket_id = self.create_bucket(bucket_name)
-        else:
-            bucket_id = self.buckets_id_by_name[bucket_name]
-        return self.get_bucket_by_id(bucket_id, create_if_missing=create_if_missing)
-
-    def create_bucket(self, bucket_name: str) -> str:
-        if bucket_name in self.buckets_id_by_name:
-            return self.buckets_id_by_name[bucket_name]
-        bucket_id = f"bucket-{len(self.buckets)+1}"
-        self.buckets_id_by_name[bucket_name] = bucket_id
-        self.buckets[bucket_id] = Bucket(bucket_name, self.args)
-        return bucket_id
 
 
 class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
@@ -250,15 +248,12 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
     def get_bucket(self, bucket_name: str, bucket_id: str, create_if_missing: bool) -> Bucket | None:
         if bucket_id:
             try:
-                return self.store.get_bucket_by_id(bucket_id)
+                return self.store.get_bucket_by_id(bucket_name, bucket_id)
             except KeyError:
                 return None
-        elif bucket_name:
-            try:
-                return self.store.get_bucket_by_name(bucket_name, create_if_missing=create_if_missing)
-            except KeyError:
-                return None
-        return None
+        else:
+            logging.error("Bucket ID must be provided to get_bucket")
+            return None
 
     def get_object(self, bucket: Bucket, object_key: str, instance_id: str, create_if_missing: bool = False) -> Object | None:
         # Allow ValueError to propagate up - this is an protocol error we should return.
@@ -276,19 +271,25 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         with tracer.start_as_current_span("GetBucketAttributes"):
             logging.debug(
                 f"GetBucketAttributes request: [{msg_to_log(request)}]")
+            if not request.bucket_id:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Bucket ID must be provided")
+                logging.error(f"GetBucketAttributes failed: "
+                              f"{context.code()} {context.details().decode('UTF-8')}")
+                return mdoffload_pb2.SetBucketAttributesResponse()
 
-            bucket_id = self.get_bucket(
+            bucket = self.get_bucket(
                 request.bucket_name, request.bucket_id, True)
-            if bucket_id is None:
+            if bucket is None:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details("Bucket not found")
                 logging.error(
-                    f"Bucket not found: {request.bucket_name} / {request.bucket_id}: "
+                    f"GetBucketAttributes failed: {request.bucket_name}/{request.bucket_id}: "
                     f"{context.code()} {context.details().decode('UTF-8')}")
                 return mdoffload_pb2.GetBucketAttributesResponse()
 
             response = mdoffload_pb2.GetBucketAttributesResponse(
-                attributes=bucket_id.attrs().list()
+                attributes=bucket.attrs().list()
             )
 
             logging.debug(
@@ -303,21 +304,28 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         with tracer.start_as_current_span("SetBucketAttributes"):
             logging.debug(
                 f"SetBucketAttributes request: [{msg_to_log(request)}]")
-
-            bucket_id = self.get_bucket(
-                request.bucket_name, request.bucket_id, True)
-            if bucket_id is None:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Bucket not found")
-                logging.error(f"Bucket not found: {request.bucket_name} / {request.bucket_id}: "
+            if not request.bucket_id:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Bucket ID must be provided")
+                logging.error(f"SetBucketAttributes failed: "
                               f"{context.code()} {context.details().decode('UTF-8')}")
                 return mdoffload_pb2.SetBucketAttributesResponse()
 
-            bucket_id.attrs().update(
+            bucket = self.get_bucket(
+                request.bucket_name, request.bucket_id, True)
+            if bucket is None:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details("Bucket not found")
+                logging.error(f"SetBucketAttributes failed: Bucket not found: "
+                              f"{request.bucket_name}/{request.bucket_id}: "
+                              f"{context.code()} {context.details().decode('UTF-8')}")
+                return mdoffload_pb2.SetBucketAttributesResponse()
+
+            bucket.attrs().update(
                 request.attributes_to_add, request.attributes_to_delete
             )
             logging.debug(
-                f"Updated bucket attributes: {','.join([f'{k}={v}' for k,v in bucket_id.attrs().list()])}")
+                f"Updated bucket attributes: {','.join([f'{k}={v}' for k,v in bucket.attrs().list()])}")
 
             response = mdoffload_pb2.SetBucketAttributesResponse()
             logging.debug(
@@ -332,6 +340,12 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         with tracer.start_as_current_span("GetObjectAttributes"):
             logging.debug(
                 f"GetObjectAttributes request: [{msg_to_log(request)}]")
+            if not request.bucket_id:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Bucket ID must be provided")
+                logging.error(f"GetObjectAttributes failed: "
+                              f"{context.code()} {context.details().decode('UTF-8')}")
+                return mdoffload_pb2.SetBucketAttributesResponse()
 
             bucket = self.get_bucket(
                 request.bucket_name, request.bucket_id, args.create_bucket_if_missing)
@@ -339,7 +353,7 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details("Bucket not found")
                 logging.error(
-                    f"Bucket not found: {request.bucket_name} / {request.bucket_id}: "
+                    f"GetObjectAttributes failed: Bucket not found: {request.bucket_name}/{request.bucket_id}: "
                     f"{context.code()} {context.details().decode('UTF-8')}")
                 return mdoffload_pb2.GetObjectAttributesResponse()
 
@@ -353,7 +367,9 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
             except ValueError as ve:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(str(ve))
-                logging.error(f"Invalid argument: {request.bucket_name} / {request.bucket_id} / "
+                logging.error(f"GetObjectAttributes failed: Invalid argument: "
+                              f"{request.bucket_name}/{request.bucket_id}/"
+                              f"{request.object_key}/{request.object_instance_id}: "
                               f"{request.object_key} / {request.object_instance_id}: "
                               f"{context.code()} {context.details().decode('UTF-8')}")
                 return mdoffload_pb2.GetObjectAttributesResponse()
@@ -375,21 +391,31 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
         with tracer.start_as_current_span("SetObjectAttributes"):
             logging.debug(
                 f"SetObjectAttributes request: [{msg_to_log(request)}]")
+            if not request.bucket_id:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Bucket ID must be provided")
+                logging.error(f"SetObjectAttributes failed: "
+                              f"{request.bucket_name} / {request.bucket_id}: "
+                              f"{context.code()} {context.details().decode('UTF-8')}")
+                return mdoffload_pb2.SetBucketAttributesResponse()
 
             bucket = self.get_bucket(
                 request.bucket_name, request.bucket_id, args.create_bucket_if_missing)
+
             if bucket is None:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details("Bucket not found")
                 logging.error(
                     f"Bucket not found: {request.bucket_name} / {request.bucket_id}: {context.code()} {context.details()}")
                 return mdoffload_pb2.SetObjectAttributesResponse()
+
             obj = self.get_object(
                 bucket, request.object_key, request.object_instance_id, args.create_object_if_missing)
             if obj is None:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details("Object not found")
                 return mdoffload_pb2.SetObjectAttributesResponse()
+
             logging.debug(f"Setting attributes on object: {obj.locate()}")
             obj.attrs().update(request.attributes_to_add, request.attributes_to_delete)
             logging.debug(

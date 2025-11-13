@@ -29,7 +29,7 @@ def gather_attributes(args: argparse.Namespace) -> tuple[dict[str, str], list[st
     if args.add_attribute:
         for attr in args.add_attribute:
             k, v = attr.split("=", 1)
-            attributes_to_add[k] = v
+            attributes_to_add[k] = v.encode()
     if args.delete_attribute:
         for attr in args.delete_attribute:
             attributes_to_delete.append(attr)
@@ -48,7 +48,10 @@ def get_bucket_attributes(
     logging.debug(f"get_bucket_attributes request: [{msg_to_log(request)}]")
     response = stub.GetBucketAttributes(request)
     logging.debug(f"get_bucket_attributes response: [{msg_to_log(response)}]")
-    print(MessageToJson(response))
+    # print(MessageToJson(response, preserving_proto_field_name=True))
+    print("Attributes:")
+    for k, v in response.attributes.items():
+        print(f"  {k} = {v.decode()}")
     return True
 
 
@@ -81,12 +84,15 @@ def get_object_attributes(
         bucket_id=args.bucket_id if args.bucket_id else "",
         bucket_name=args.bucket_name if args.bucket_name else "",
         object_key=args.object_key if args.object_key else "",
-        object_instance_id=args.instance_id if args.instance_id else "",
+        object_instance_id=args.version_id if args.version_id else "",
     )
     logging.debug(f"get_object_attributes request: [{msg_to_log(request)}]")
     response = stub.GetObjectAttributes(request)
     logging.debug(f"get_object_attributes response: [{msg_to_log(response)}]")
-    print(MessageToJson(response))
+    # print(MessageToJson(response))
+    print("Attributes:")
+    for k, v in response.attributes.items():
+        print(f"  {k} = {v.decode()}")
     return True
 
 
@@ -101,7 +107,7 @@ def set_object_attributes(
         bucket_id=args.bucket_id if args.bucket_id else "",
         bucket_name=args.bucket_name if args.bucket_name else "",
         object_key=args.object_key,
-        object_instance_id=args.instance_id,
+        object_instance_id=args.version_id,
         attributes_to_add=attributes_to_add,
         attributes_to_delete=attributes_to_delete,
     )
@@ -156,10 +162,14 @@ def main(argv: list[str]) -> None:
                    choices=["get-bucket-attributes", "set-bucket-attributes",
                             "get-object-attributes", "set-object-attributes",])
     p.add_argument("-b", "--bucket-name", help="bucket name", default="")
-    p.add_argument("--bucket-id", help="bucket id", default="")
+    p.add_argument("-i", "--bucket-id", help="bucket id", default="")
+    p.add_argument("-I", "--generate-predictable-bucket-id",
+                   help="generate a predictable bucket id", action="store_true")
+    p.add_argument("-R", "--generate-random-bucket-id",
+                   help="generate a random bucket id", action="store_true")
     p.add_argument("-k", "--object-key",
                    help="object key to authorize", default="")
-    p.add_argument("-i", "--instance-id", help="instance id", default="")
+    p.add_argument("-V", "--version-id", help="Object version (instance) id", default="")
     p.add_argument("-u", "--user-id", help="user id", default="testid")
     p.add_argument("-A", "--add-attribute",
                    help="set a bucket attribute (k=v)", action="append")
@@ -189,6 +199,23 @@ def main(argv: list[str]) -> None:
         coloredlogs.install(level=logging.DEBUG)
     else:
         coloredlogs.install(level=logging.INFO)
+
+    if args.generate_predictable_bucket_id:
+        # Generate a bucket ID (a UUID) based on the name.
+        import uuid
+        namespace = uuid.UUID("deadbeef-0ddc-0ffe-ebad-f00ddeadbeef")
+        bucket_id = uuid.uuid5(namespace, args.bucket_name)
+        args.bucket_id = str(bucket_id)
+        logging.debug(f"generated stable bucket ID {args.bucket_id} for name {args.bucket_name}")
+
+    elif args.generate_random_bucket_id:
+        import uuid
+        bucket_id = uuid.uuid4()
+        args.bucket_id = str(bucket_id)
+        logging.debug(f"generated random bucket ID {args.bucket_id} for name {args.bucket_name}")
+
+    if not args.bucket_id:
+        logging.warning("No bucket ID specified, operations may fail")
 
     if args.tls:
         if not args.ca_cert:
