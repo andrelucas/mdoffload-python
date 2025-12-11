@@ -202,7 +202,7 @@ class Object:
         return f"Bucket['{self.bucket.name}'/'{self.bucket.id}'] Key['{self.key}']"
 
     def purge(self) -> None:
-        logging.debug(f"Purging object {self.locate()}")
+        logging.debug(f"Purging object {self.locate()} (NOP)")
 
 
 class Bucket:
@@ -237,6 +237,8 @@ class Bucket:
 
     def purge_object(self, key: ObjectKey) -> None:
         if key not in self.objects:
+            logging.warning(
+                f"Bucket {self.name}: Cannot purge object {key}, not found")
             raise KeyError(f"bucket {self.name}: Object key {key} not found")
         logging.debug(
             f"Bucket {self.name}: Purging object {key}")
