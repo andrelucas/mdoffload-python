@@ -71,6 +71,7 @@ grpc_server_instrumentor.instrument()
 class BucketNotEmptyError(RuntimeError):
     pass
 
+
 class FilePath:
     def __init__(self, args: argparse.Namespace) -> None:
         self.data_dir = args.data_dir
@@ -100,12 +101,14 @@ class Attributes:
             dbfile, tablename=tablename, autocommit=True)
 
     def close(self) -> None:
-        logging.debug(f"Closing attribute database file: {self.attrs.filename}")
+        logging.debug(
+            f"Closing attribute database file: {self.attrs.filename}")
         self.attrs.close()
 
     def purge(self) -> None:
         self.attrs.close()
-        logging.debug(f"Purging attribute database file: {self.attrs.filename}")
+        logging.debug(
+            f"Purging attribute database file: {self.attrs.filename}")
         os.remove(self.attrs.filename)
 
     def set(self, key: str, value: str) -> None:
@@ -200,7 +203,6 @@ class Object:
 
     def purge(self) -> None:
         logging.debug(f"Purging object {self.locate()}")
-        self.attributes.purge()
 
 
 class Bucket:
@@ -248,18 +250,29 @@ class Bucket:
     def purge(self) -> None:
         objcount = len(self.objects)
         if objcount != 0:
-            logging.error(f"Cannot purge non-empty bucket {self.name} containing {objcount} objects")
+            logging.error(
+                f"Cannot purge non-empty bucket {self.name} containing {objcount} objects")
             raise BucketNotEmptyError(
                 f"Cannot purge bucket {self.name} with live objects")
         objcopy = dict(self.objects)  # Inefficient but safe
-        logging.debug(f"Purging bucket {self.name}, purging {len(objcopy)} objects")
+        logging.debug(
+            f"Purging bucket {self.name}, purging {len(objcopy)} objects")
         for k, v in objcopy.items():
             del self.objects[k]
             v.purge()
+        objattr_dbfile = FilePath(self.args).objectattr_path(self)
+        if os.path.exists(objattr_dbfile):
+            logging.debug(
+                f"Purging bucket {self.name} object attribute database file: {objattr_dbfile}")
+            os.remove(objattr_dbfile)
+        else:
+            logging.debug(
+                f"Bucket {self.name} object attribute database file {objattr_dbfile} does not exist")
         # A Bucket's attributes are in a table, not a separate dbfile. Need to
         # just delete all keys.
         attr = [k for k, _ in self.attributes.list()]
-        logging.debug(f"Purging bucket {self.name} id {self.id} attribute count {len(attr)}")
+        logging.debug(
+            f"Purging bucket {self.name} id {self.id} attribute count {len(attr)}")
         for k in attr:
             del self.attributes.attrs[k]
 
