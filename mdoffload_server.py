@@ -68,6 +68,9 @@ grpc_server_instrumentor = GrpcInstrumentorServer()
 grpc_server_instrumentor.instrument()
 
 
+class BucketNotEmptyError(RuntimeError):
+    pass
+
 class FilePath:
     def __init__(self, args: argparse.Namespace) -> None:
         self.data_dir = args.data_dir
@@ -96,6 +99,15 @@ class Attributes:
         self.attrs: SqliteDict = SqliteDict(
             dbfile, tablename=tablename, autocommit=True)
 
+    def close(self) -> None:
+        logging.debug(f"Closing attribute database file: {self.attrs.filename}")
+        self.attrs.close()
+
+    def purge(self) -> None:
+        self.attrs.close()
+        logging.debug(f"Purging attribute database file: {self.attrs.filename}")
+        os.remove(self.attrs.filename)
+
     def set(self, key: str, value: str) -> None:
         self.attrs[key] = value
 
@@ -122,6 +134,9 @@ class Attributes:
 
     def list(self) -> Generator[tuple[str, str], None, None]:
         return ((k, v) for k, v in self.attrs.items())
+
+    def keys(self) -> Generator[str, None, None]:
+        return self.attrs.keys()
 
 
 class ObjectKey:
@@ -183,6 +198,10 @@ class Object:
     def locate(self) -> str:
         return f"Bucket['{self.bucket.name}'/'{self.bucket.id}'] Key['{self.key}']"
 
+    def purge(self) -> None:
+        logging.debug(f"Purging object {self.locate()}")
+        self.attributes.purge()
+
 
 class Bucket:
     def __init__(self, name: str, id: str, args: argparse.Namespace) -> None:
@@ -210,17 +229,39 @@ class Bucket:
                 raise KeyError(
                     f"Object key {key} not found in bucket {self.name}")
             logging.debug(
-                f"Bucket {self.name}: Creating object {key} in bucket {self.name}")
+                f"Bucket {self.name}: Creating object {key}")
             self.objects[key] = Object(key, self, self.args)
         return self.objects[key]
 
-    def delete_object(self, key: ObjectKey) -> None:
+    def purge_object(self, key: ObjectKey) -> None:
         if key not in self.objects:
             raise KeyError(f"bucket {self.name}: Object key {key} not found")
+        logging.debug(
+            f"Bucket {self.name}: Purging object {key}")
+        obj = self.objects[key]
         del self.objects[key]
+        obj.purge()
 
     def list(self) -> Generator[tuple[ObjectKey, Object], None, None]:
         return ((k, v) for k, v in self.objects.items())
+
+    def purge(self) -> None:
+        objcount = len(self.objects)
+        if objcount != 0:
+            logging.error(f"Cannot purge non-empty bucket {self.name} containing {objcount} objects")
+            raise BucketNotEmptyError(
+                f"Cannot purge bucket {self.name} with live objects")
+        objcopy = dict(self.objects)  # Inefficient but safe
+        logging.debug(f"Purging bucket {self.name}, purging {len(objcopy)} objects")
+        for k, v in objcopy.items():
+            del self.objects[k]
+            v.purge()
+        # A Bucket's attributes are in a table, not a separate dbfile. Need to
+        # just delete all keys.
+        attr = [k for k, _ in self.attributes.list()]
+        logging.debug(f"Purging bucket {self.name} id {self.id} attribute count {len(attr)}")
+        for k in attr:
+            del self.attributes.attrs[k]
 
 
 class Store:
@@ -255,6 +296,16 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
             logging.error("Bucket ID must be provided to get_bucket")
             return None
 
+    def purge_bucket(self, bucket_name: str, bucket_id: str) -> None:
+        if bucket_id in self.store.buckets:
+            logging.debug(f"Purging bucket ID {bucket_id} from store")
+            bucket = self.store.buckets[bucket_id]
+            bucket.purge()
+            del self.store.buckets[bucket_id]
+        else:
+            logging.debug(f"Bucket ID {bucket_id} not in store, cannot purge")
+            raise KeyError(f"Bucket ID {bucket_id} not found")
+
     def get_object(self, bucket: Bucket, object_key: str, instance_id: str, create_if_missing: bool = False) -> Object | None:
         # Allow ValueError to propagate up - this is an protocol error we should return.
         key = ObjectKey(object_key, instance_id)
@@ -262,6 +313,11 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
             return bucket.get_object(key, create_if_missing=create_if_missing)
         except KeyError:
             return None
+
+    def purge_object(self, bucket: Bucket, object_key: str, instance_id: str) -> None:
+        key = ObjectKey(object_key, instance_id)
+        logging.debug(f"Deleting object {key} from bucket {bucket.name}")
+        bucket.purge_object(key)
 
     def GetBucketAttributes(
         self,
@@ -330,6 +386,38 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
             response = mdoffload_pb2.SetBucketAttributesResponse()
             logging.debug(
                 f"SetBucketAttributes response: {msg_to_log(response)}")
+            return response
+
+    def PurgeBucketAttributes(self,
+                              request: mdoffload_pb2.PurgeBucketAttributesRequest,
+                              context: grpc.ServicerContext,
+                              ):
+        with tracer.start_as_current_span("PurgeBucketAttributes"):
+            logging.debug(
+                f"PurgeBucketAttributes request: [{msg_to_log(request)}]")
+            if not request.bucket_id:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Bucket ID must be provided")
+                logging.error(f"PurgeBucketAttributes failed: "
+                              f"{context.code()} {context.details().decode('UTF-8')}")
+                return mdoffload_pb2.PurgeBucketAttributesResponse()
+
+            try:
+                self.purge_bucket(
+                    request.bucket_name, request.bucket_id)
+            except KeyError:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details("Bucket not found")
+                return mdoffload_pb2.PurgeBucketAttributesResponse()
+            except BucketNotEmptyError:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(
+                    "Bucket not empty, cannot purge attributes")
+                return mdoffload_pb2.PurgeBucketAttributesResponse()
+
+            response = mdoffload_pb2.PurgeBucketAttributesResponse()
+            logging.debug(
+                f"PurgeBucketAttributes response: {msg_to_log(response)}")
             return response
 
     def GetObjectAttributes(
@@ -416,6 +504,12 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
                 context.set_details("Object not found")
                 return mdoffload_pb2.SetObjectAttributesResponse()
 
+            if request.new_object_instance:
+                logging.debug(
+                    f"Creating new object instance, clearing existing attributes on object: {obj.locate()}")
+                obj.attrs().update(
+                    {}, list(obj.attrs().attrs.keys())
+                )  # Clear all existing attributes
             logging.debug(f"Setting attributes on object: {obj.locate()}")
             obj.attrs().update(request.attributes_to_add, request.attributes_to_delete)
             logging.debug(
@@ -425,6 +519,43 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
 
             logging.debug(
                 f"SetObjectAttributes response: {msg_to_log(response)}")
+            return response
+
+    def PurgeObjectAttributes(self,
+                              request: mdoffload_pb2.PurgeObjectAttributesRequest,
+                              context: grpc.ServicerContext):
+        with tracer.start_as_current_span("PurgeObjectAttributes"):
+            logging.debug(
+                f"PurgeObjectAttributes request: [{msg_to_log(request)}]")
+            if not request.bucket_id:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Bucket ID must be provided")
+                logging.error(f"PurgeObjectAttributes failed: "
+                              f"{request.bucket_name} / {request.bucket_id}: "
+                              f"{context.code()} {context.details().decode('UTF-8')}")
+                return mdoffload_pb2.PurgeObjectAttributesResponse()
+
+            bucket = self.get_bucket(
+                request.bucket_name, request.bucket_id, False)
+
+            if bucket is None:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details("Bucket not found")
+                logging.error(
+                    f"Bucket not found: {request.bucket_name} / {request.bucket_id}: {context.code()} {context.details()}")
+                return mdoffload_pb2.PurgeObjectAttributesResponse()
+
+            try:
+                self.purge_object(
+                    bucket, request.object_key, request.object_instance_id)
+            except KeyError:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details("Object not found")
+                return mdoffload_pb2.PurgeObjectAttributesResponse()
+
+            response = mdoffload_pb2.PurgeObjectAttributesResponse()
+            logging.debug(
+                f"PurgeObjectAttributes response: {msg_to_log(response)}")
             return response
 
 

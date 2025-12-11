@@ -42,6 +42,7 @@ def safe_print_attr(k: str, v: bytes) -> None:
     except UnicodeDecodeError:
         print(f"  {k} = <binary data {base64.b64encode(v).decode()}>")
 
+
 def get_bucket_attributes(
     stub: mdoffload_pb2_grpc.MDOffloadServiceStub,
     args: argparse.Namespace,
@@ -81,6 +82,23 @@ def set_bucket_attributes(
     return True
 
 
+def purge_bucket_attributes(
+    stub: mdoffload_pb2_grpc.MDOffloadServiceStub,
+    args: argparse.Namespace,
+) -> bool:
+    request = mdoffload_pb2.PurgeBucketAttributesRequest(
+        user_id=args.user_id,
+        bucket_id=args.bucket_id if args.bucket_id else "",
+        bucket_name=args.bucket_name if args.bucket_name else "",
+    )
+    logging.debug(f"purge_bucket_attributes request: [{msg_to_log(request)}]")
+    response = stub.PurgeBucketAttributes(request)
+    logging.debug(
+        f"purge_bucket_attributes response: [{msg_to_log(response)}]")
+    print(MessageToJson(response))
+    return True
+
+
 def get_object_attributes(
     stub: mdoffload_pb2_grpc.MDOffloadServiceStub,
     args: argparse.Namespace,
@@ -116,10 +134,30 @@ def set_object_attributes(
         object_instance_id=args.version_id,
         attributes_to_add=attributes_to_add,
         attributes_to_delete=attributes_to_delete,
+        new_object_instance=args.new_object_instance,
     )
     logging.debug(f"set_object_attributes request: [{msg_to_log(request)}]")
     response = stub.SetObjectAttributes(request)
     logging.debug(f"set_object_attributes response: [{msg_to_log(response)}]")
+    print(MessageToJson(response))
+    return True
+
+
+def purge_object_attributes(
+    stub: mdoffload_pb2_grpc.MDOffloadServiceStub,
+    args: argparse.Namespace,
+) -> bool:
+    request = mdoffload_pb2.PurgeObjectAttributesRequest(
+        user_id=args.user_id,
+        bucket_id=args.bucket_id if args.bucket_id else "",
+        bucket_name=args.bucket_name if args.bucket_name else "",
+        object_key=args.object_key if args.object_key else "",
+        object_instance_id=args.version_id if args.version_id else "",
+    )
+    logging.debug(f"purge_object_attributes request: [{msg_to_log(request)}]")
+    response = stub.PurgeObjectAttributes(request)
+    logging.debug(
+        f"purge_object_attributes response: [{msg_to_log(response)}]")
     print(MessageToJson(response))
     return True
 
@@ -139,6 +177,10 @@ def issue(channel: grpc.Channel, args: argparse.Namespace) -> bool:
             return get_object_attributes(stub, args)
         elif args.command == "set-object-attributes":
             return set_object_attributes(stub, args)
+        elif args.command == "purge-bucket-attributes":
+            return purge_bucket_attributes(stub, args)
+        elif args.command == "purge-object-attributes":
+            return purge_object_attributes(stub, args)
         else:
             logging.error(f"Unknown command '{args.command}'")
             sys.exit(2)
@@ -151,7 +193,8 @@ def issue(channel: grpc.Channel, args: argparse.Namespace) -> bool:
                     if detail.Is(error_details_pb2.DebugInfo.DESCRIPTOR):
                         debug_info = error_details_pb2.DebugInfo()
                         detail.Unpack(debug_info)
-                        logging.error(f"Debug info: {debug_info.stack_entries}")
+                        logging.error(
+                            f"Debug info: {debug_info.stack_entries}")
         return False
 
 
@@ -166,7 +209,8 @@ def main(argv: list[str]) -> None:
     p = argparse.ArgumentParser(description="AuthService client")
     p.add_argument("command", help="command to run",
                    choices=["get-bucket-attributes", "set-bucket-attributes",
-                            "get-object-attributes", "set-object-attributes",])
+                            "get-object-attributes", "set-object-attributes",
+                            "purge-bucket-attributes", "purge-object-attributes"])
     p.add_argument("-b", "--bucket-name", help="bucket name", default="")
     p.add_argument("-i", "--bucket-id", help="bucket id", default="")
     p.add_argument("-I", "--generate-predictable-bucket-id",
@@ -175,12 +219,16 @@ def main(argv: list[str]) -> None:
                    help="generate a random bucket id", action="store_true")
     p.add_argument("-k", "--object-key",
                    help="object key to authorize", default="")
-    p.add_argument("-V", "--version-id", help="Object version (instance) id", default="")
+    p.add_argument("-V", "--version-id",
+                   help="Object version (instance) id", default="")
     p.add_argument("-u", "--user-id", help="user id", default="testid")
     p.add_argument("-A", "--add-attribute",
                    help="set a bucket attribute (k=v)", action="append")
     p.add_argument("-D", "--delete-attribute",
                    help="set an object attribute (k=v)", action="append")
+    p.add_argument("-N", "--new-object-instance",
+                   help="Mark as a new object instance (erase existing attrs)",
+                   action="store_true")
     p.add_argument("-t", "--tls", help="connect to the server using TLS", action="store_true"
                    )
     p.add_argument(
@@ -212,13 +260,15 @@ def main(argv: list[str]) -> None:
         namespace = uuid.UUID("deadbeef-0ddc-0ffe-ebad-f00ddeadbeef")
         bucket_id = uuid.uuid5(namespace, args.bucket_name)
         args.bucket_id = str(bucket_id)
-        logging.debug(f"generated stable bucket ID {args.bucket_id} for name {args.bucket_name}")
+        logging.debug(
+            f"generated stable bucket ID {args.bucket_id} for name {args.bucket_name}")
 
     elif args.generate_random_bucket_id:
         import uuid
         bucket_id = uuid.uuid4()
         args.bucket_id = str(bucket_id)
-        logging.debug(f"generated random bucket ID {args.bucket_id} for name {args.bucket_name}")
+        logging.debug(
+            f"generated random bucket ID {args.bucket_id} for name {args.bucket_name}")
 
     if not args.bucket_id:
         logging.warning("No bucket ID specified, operations may fail")
