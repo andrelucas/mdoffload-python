@@ -111,35 +111,47 @@ class Attributes:
             f"Purging attribute database file: {self.attrs.filename}")
         os.remove(self.attrs.filename)
 
+    def has_key(self, key: str) -> bool:
+        return f'attr:{key}' in self.attrs
+
     def set(self, key: str, value: str) -> None:
-        self.attrs[key] = value
+        self.attrs[f'attr:{key}'] = value
 
     def get(self, key: str, create_if_missing: bool = False) -> str:
-        if key not in self.attrs:
+        if f'attr:{key}' not in self.attrs:
             if not create_if_missing:
                 raise KeyError(f"Attribute {key} not found")
-            self.attrs[key] = ""
-        return self.attrs[key]
+            self.attrs[f'attr:{key}'] = ""
+        return self.attrs[f'attr:{key}']
+
+    def delete(self, key: str) -> None:
+        if f'attr:{key}' in self.attrs:
+            del (self.attrs[f'attr:{key}'])
+        else:
+            raise KeyError(f"Attribute {key} not found, cannot delete")
 
     def update(self, attributes_to_add: dict[str, str], attributes_to_delete: list[str]) -> None:
+        logging.debug(f"Attribute update: add {attributes_to_add}, delete {attributes_to_delete}")
+        logging.debug(f"Attributes before update: {list(self.keys())}")
         for k, v in attributes_to_add.items():
             logging.debug(f"Setting attribute {k}={v}")
-            self.attrs[k] = v
+            self.set(k, v)
         for k in attributes_to_delete:
             if '=' in k:
                 logging.warning(
                     f"Attribute delete key '{k}' contains '=', may be in error")
-            if k in self.attrs:
+            if self.has_key(k):
                 logging.debug(f"Deleting attribute {k}")
-                del (self.attrs[k])
+                self.delete(k)
             else:
                 logging.warning(f"Attribute {k} not found, cannot delete")
+        logging.debug(f"Attributes after update: {list(self.keys())}")
 
     def list(self) -> Generator[tuple[str, str], None, None]:
-        return ((k, v) for k, v in self.attrs.items())
+        return ((k.lstrip('attr:'), v) for k, v in self.attrs.items() if k.startswith('attr:'))
 
     def keys(self) -> Generator[str, None, None]:
-        return self.attrs.keys()
+        return (k.lstrip('attr:') for k in self.attrs.keys() if k.startswith('attr:'))
 
 
 class ObjectKey:
@@ -202,7 +214,8 @@ class Object:
         return f"Bucket['{self.bucket.name}'/'{self.bucket.id}'] Key['{self.key}']"
 
     def purge(self) -> None:
-        logging.debug(f"Purging object {self.locate()} (NOP)")
+        logging.debug(f"Purging object {self.locate()}")
+        self.attributes.purge()
 
 
 class Bucket:
@@ -256,12 +269,12 @@ class Bucket:
                 f"Cannot purge non-empty bucket {self.name} containing {objcount} objects")
             raise BucketNotEmptyError(
                 f"Cannot purge bucket {self.name} with live objects")
-        objcopy = dict(self.objects)  # Inefficient but safe
-        logging.debug(
-            f"Purging bucket {self.name}, purging {len(objcopy)} objects")
-        for k, v in objcopy.items():
-            del self.objects[k]
-            v.purge()
+        # objcopy = dict(self.objects)  # Inefficient but safe
+        # logging.debug(
+        #     f"Purging bucket {self.name}, purging {len(objcopy)} objects")
+        # for k, v in objcopy.items():
+        #     del self.objects[k]
+        #     v.purge()
         objattr_dbfile = FilePath(self.args).objectattr_path(self)
         if os.path.exists(objattr_dbfile):
             logging.debug(
@@ -276,7 +289,7 @@ class Bucket:
         logging.debug(
             f"Purging bucket {self.name} id {self.id} attribute count {len(attr)}")
         for k in attr:
-            del self.attributes.attrs[k]
+            self.attributes.delete(k)
 
 
 class Store:
@@ -523,7 +536,7 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
                 logging.debug(
                     f"Creating new object instance, clearing existing attributes on object: {obj.locate()}")
                 obj.attrs().update(
-                    {}, list(obj.attrs().attrs.keys())
+                    {}, list(obj.attrs().keys())
                 )  # Clear all existing attributes
             logging.debug(f"Setting attributes on object: {obj.locate()}")
             obj.attrs().update(request.attributes_to_add, request.attributes_to_delete)
