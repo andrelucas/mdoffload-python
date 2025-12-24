@@ -405,6 +405,15 @@ class MDOffloadServer(mdoffload_pb2_grpc.MDOffloadServiceServicer):
                               f"{context.code()} {context.details().decode('UTF-8')}")
                 return mdoffload_pb2.SetBucketAttributesResponse()
 
+            if request.replace_existing_attributes:
+                logging.info(
+                    f"Replacing existing attributes on bucket {bucket.name} as directed")
+                bucket.attrs().update(
+                    {}, list(bucket.attrs().keys())
+                )  # Clear all existing attributes
+                logging.debug(
+                    f"Cleared existing attributes on bucket {bucket.name}, "
+                    f"new attributes: {','.join([f'{k}={v}' for k,v in bucket.attrs().list()])}")
             bucket.attrs().update(
                 request.attributes_to_add, request.attributes_to_delete
             )

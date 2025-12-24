@@ -73,7 +73,8 @@ def set_bucket_attributes(
         bucket_id=args.bucket_id if args.bucket_id else "",
         bucket_name=args.bucket_name if args.bucket_name else "",
         attributes_to_add=attributes_to_add,
-        attributes_to_delete=attributes_to_delete
+        attributes_to_delete=attributes_to_delete,
+        replace_existing_attributes=args.replace_bucket_attributes,
     )
     logging.debug(f"set_bucket_attributes request: [{msg_to_log(request)}]")
     response = stub.SetBucketAttributes(request)
@@ -217,6 +218,8 @@ def main(argv: list[str]) -> None:
                    help="generate a predictable bucket id", action="store_true")
     p.add_argument("-R", "--generate-random-bucket-id",
                    help="generate a random bucket id", action="store_true")
+    p.add_argument("--replace-bucket-attributes", action="store_true",
+                   help="replace existing bucket attributes (not just add/delete)")
     p.add_argument("-k", "--object-key",
                    help="object key to authorize", default="")
     p.add_argument("-V", "--version-id",

@@ -30,6 +30,7 @@ message SetBucketAttributesRequest {
   string bucket_name = 2;
   map<string, bytes> attributes_to_add = 3;
   repeated string attributes_to_delete = 4;
+  bool replace_existing_attributes = 6;
 }
 
 message SetBucketAttributesResponse {}
